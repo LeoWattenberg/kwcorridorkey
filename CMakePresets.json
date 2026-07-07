@@ -1,0 +1,107 @@
+{
+  "version": 6,
+  "cmakeMinimumRequired": {
+    "major": 3,
+    "minor": 24,
+    "patch": 0
+  },
+  "configurePresets": [
+    {
+      "name": "native",
+      "displayName": "Native client and tests",
+      "binaryDir": "${sourceDir}/build/native",
+      "cacheVariables": {
+        "KWCORRIDORKEY_BUILD_OPENFX": "OFF",
+        "KWCORRIDORKEY_BUILD_PREMIERE": "OFF",
+        "KWCORRIDORKEY_BUILD_TESTS": "ON"
+      }
+    },
+    {
+      "name": "resolve",
+      "displayName": "DaVinci Resolve OpenFX plugin",
+      "binaryDir": "${sourceDir}/build/resolve",
+      "cacheVariables": {
+        "KWCORRIDORKEY_BUILD_OPENFX": "ON",
+        "KWCORRIDORKEY_BUILD_PREMIERE": "OFF",
+        "KWCORRIDORKEY_BUILD_TESTS": "ON"
+      }
+    },
+    {
+      "name": "premiere",
+      "displayName": "Adobe Premiere plugin",
+      "binaryDir": "${sourceDir}/build/premiere",
+      "cacheVariables": {
+        "KWCORRIDORKEY_BUILD_OPENFX": "OFF",
+        "KWCORRIDORKEY_BUILD_PREMIERE": "ON",
+        "KWCORRIDORKEY_BUILD_TESTS": "ON"
+      }
+    },
+    {
+      "name": "blender",
+      "displayName": "Blender add-on package",
+      "binaryDir": "${sourceDir}/build/blender",
+      "cacheVariables": {
+        "KWCORRIDORKEY_BUILD_OPENFX": "OFF",
+        "KWCORRIDORKEY_BUILD_PREMIERE": "OFF",
+        "KWCORRIDORKEY_BUILD_TESTS": "OFF"
+      }
+    },
+    {
+      "name": "all",
+      "displayName": "All available integrations",
+      "binaryDir": "${sourceDir}/build/all",
+      "cacheVariables": {
+        "KWCORRIDORKEY_BUILD_OPENFX": "ON",
+        "KWCORRIDORKEY_BUILD_PREMIERE": "ON",
+        "KWCORRIDORKEY_BUILD_TESTS": "ON"
+      }
+    }
+  ],
+  "buildPresets": [
+    {
+      "name": "native",
+      "configurePreset": "native",
+      "configuration": "Release"
+    },
+    {
+      "name": "resolve",
+      "configurePreset": "resolve",
+      "configuration": "Release"
+    },
+    {
+      "name": "premiere",
+      "configurePreset": "premiere",
+      "configuration": "Release"
+    },
+    {
+      "name": "blender",
+      "configurePreset": "blender",
+      "configuration": "Release",
+      "targets": [
+        "package_blender_addon"
+      ]
+    },
+    {
+      "name": "all",
+      "configurePreset": "all",
+      "configuration": "Release"
+    }
+  ],
+  "testPresets": [
+    {
+      "name": "native",
+      "configurePreset": "native",
+      "configuration": "Release"
+    },
+    {
+      "name": "resolve",
+      "configurePreset": "resolve",
+      "configuration": "Release"
+    },
+    {
+      "name": "all",
+      "configurePreset": "all",
+      "configuration": "Release"
+    }
+  ]
+}

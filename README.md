@@ -16,11 +16,36 @@ This repository does not vendor CorridorKey. Build and install tooling resolves 
 ## Build
 
 ```powershell
-cmake -S . -B build
-cmake --build build --config Release
+cmake --preset resolve
+cmake --build --preset resolve
 ```
 
+Standard build directories are:
+
+- `build/native`: shared C++ client and native tests
+- `build/resolve`: DaVinci Resolve OpenFX plugin
+- `build/premiere`: Adobe Premiere plugin
+- `build/blender`: Blender add-on package
+- `build/all`: all integrations available on the current machine
+
+The Resolve bundle is emitted at `build/resolve/CorridorKeyResolve.ofx.bundle`. The Blender package target emits `build/blender/CorridorKeyBlender.zip`.
+
 The OpenFX SDK and C++ helper dependencies are fetched at configure/build time. The Adobe SDK is not redistributed; set `ADOBE_AE_SDK_ROOT` or `ADOBE_PREMIERE_SDK_ROOT` to build the Premiere plugin.
+
+Useful preset commands:
+
+```powershell
+cmake --preset native
+cmake --build --preset native
+ctest --preset native
+
+cmake --preset resolve
+cmake --build --preset resolve
+ctest --preset resolve
+
+cmake --preset blender
+cmake --build --preset blender
+```
 
 Install the external CorridorKey worker environment:
 
@@ -45,4 +70,3 @@ Frame data is exchanged via raw float32 files that the worker memory maps. Input
 ## License Notice
 
 CorridorKey has additional non-commercial, no-repackaging, and commercial integration restrictions. See `THIRD_PARTY_NOTICES.md` and the upstream license before distributing these plugins.
-
