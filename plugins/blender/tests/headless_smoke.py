@@ -16,6 +16,10 @@ ROOT = Path(__file__).resolve().parents[3]
 sys.path.insert(0, str(ROOT / "plugins" / "blender"))
 sys.path.insert(0, str(ROOT / "worker" / "src"))
 os.environ["CORRIDORKEY_WORKER_FAKE_ENGINE"] = "1"
+os.environ.setdefault(
+    "CORRIDORKEY_WORKER_PYTHON",
+    str(ROOT / ".deps" / "corridorkey-runtime-check" / ".venv" / "Scripts" / "python.exe"),
+)
 
 import corridorkey_blender  # noqa: E402
 
@@ -35,27 +39,37 @@ def main() -> None:
         with tempfile.TemporaryDirectory() as temp:
             temp_path = Path(temp)
             source = temp_path / "source_0001.png"
-            alpha = temp_path / "alpha_0001.png"
             output = temp_path / "out"
             make_image(source, (0.0, 1.0, 0.0, 1.0))
-            make_image(alpha, (0.5, 0.5, 0.5, 1.0))
 
-            settings = bpy.context.scene.corridorkey
-            settings.source_path = str(source)
-            settings.alpha_path = str(alpha)
-            settings.output_dir = str(output)
-            settings.start_frame = 1
-            settings.end_frame = 1
-            result = bpy.ops.corridorkey.render_sequence()
+            scene = bpy.context.scene
+            tree = getattr(scene, "node_tree", None)
+            if tree is None:
+                tree = bpy.data.node_groups.new("CorridorKey Smoke Compositor", "CompositorNodeTree")
+                scene.compositing_node_group = tree
+            else:
+                scene.use_nodes = True
+            tree.nodes.clear()
+            image_node = tree.nodes.new("CompositorNodeImage")
+            image_node.image = bpy.data.images.load(str(source), check_existing=False)
+            corridor_node = tree.nodes.new("CORRIDORKEY_ND_compositor_node")
+            corridor_node.output_dir = str(output)
+            corridor_node.start_frame = 1
+            corridor_node.end_frame = 1
+            corridor_node.select = True
+            tree.nodes.active = corridor_node
+            tree.links.new(image_node.outputs["Image"], corridor_node.inputs["Image"])
+
+            result = bpy.ops.corridorkey.render_selected_node()
             if result != {"FINISHED"}:
                 raise RuntimeError(f"unexpected operator result: {result}")
-            expected = output / "corridorkey_processed_rgba_0001.exr"
-            if not expected.exists():
-                raise RuntimeError(f"missing output: {expected}")
+            for name in ("image", "preview", "matte"):
+                expected = output / f"corridorkey_{name}_0001.exr"
+                if not expected.exists():
+                    raise RuntimeError(f"missing output: {expected}")
     finally:
         corridorkey_blender.unregister()
 
 
 if __name__ == "__main__":
     main()
-

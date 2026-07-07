@@ -41,10 +41,12 @@ class WorkerClient:
         self._next_id = 1
 
     def close(self) -> None:
-        try:
-            self.request("shutdown", {})
-        finally:
-            self._proc.wait(timeout=5)
+        if self._proc.poll() is None:
+            try:
+                self.request("shutdown", {})
+            except OSError:
+                pass
+        self._proc.wait(timeout=5)
 
     def request(self, command: str, payload: dict[str, Any]) -> dict[str, Any]:
         if self._proc.stdin is None or self._proc.stdout is None:
@@ -76,4 +78,3 @@ class WorkerClient:
                 "output": output.asdict(),
             },
         )
-
