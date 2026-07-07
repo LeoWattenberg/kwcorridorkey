@@ -1,0 +1,8 @@
+{
+  "repo": "https://github.com/nikopueringer/CorridorKey.git",
+  "ref": "main",
+  "commit": "97e55a453060745bead1befd293f6e523c4b845c",
+  "resolved_at": "2026-07-07",
+  "policy": "External dependency only. Do not vendor CorridorKey source into this repository."
+}
+
