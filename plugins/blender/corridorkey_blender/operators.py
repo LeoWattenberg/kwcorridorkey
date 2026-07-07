@@ -29,19 +29,48 @@ def _preferences(context):
     return addon.preferences if addon else None
 
 
+def _selected_strips(context):
+    for attr in ("selected_sequences", "selected_strips"):
+        strips = getattr(context, attr, None)
+        if strips is not None:
+            return list(strips)
+
+    editor = getattr(context.scene, "sequence_editor", None)
+    if editor is None:
+        return []
+    return [strip for strip in editor.sequences_all if getattr(strip, "select", False)]
+
+
+def _strip_path(strip):
+    filepath = getattr(strip, "filepath", "")
+    if filepath:
+        return filepath
+
+    directory = getattr(strip, "directory", "")
+    elements = getattr(strip, "elements", None)
+    if directory and elements:
+        return os.path.join(directory, elements[0].filename)
+
+    raise ValueError(f"Selected strip '{strip.name}' does not expose a file path")
+
+
 class CORRIDORKEY_OT_from_selected_strips(bpy.types.Operator):
     bl_idname = "corridorkey.from_selected_strips"
     bl_label = "Use Selected Strips"
     bl_options = {"REGISTER", "UNDO"}
 
     def execute(self, context):
-        strips = list(context.selected_sequences or [])
+        strips = _selected_strips(context)
         if len(strips) < 2:
             self.report({"ERROR"}, "Select source and alpha hint strips")
             return {"CANCELLED"}
         settings = context.scene.corridorkey
-        settings.source_path = bpy.path.abspath(strips[0].filepath)
-        settings.alpha_path = bpy.path.abspath(strips[1].filepath)
+        try:
+            settings.source_path = bpy.path.abspath(_strip_path(strips[0]))
+            settings.alpha_path = bpy.path.abspath(_strip_path(strips[1]))
+        except ValueError as exc:
+            self.report({"ERROR"}, str(exc))
+            return {"CANCELLED"}
         settings.start_frame = context.scene.frame_start
         settings.end_frame = context.scene.frame_end
         if not settings.output_dir:
@@ -99,4 +128,3 @@ class CORRIDORKEY_OT_render_sequence(bpy.types.Operator):
 
         self.report({"INFO"}, "CorridorKey render complete")
         return {"FINISHED"}
-

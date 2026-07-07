@@ -35,26 +35,38 @@ def ensure_checkout(root: Path, lock: dict[str, str]) -> Path:
     return source
 
 
-def ensure_uv() -> str:
+def ensure_uv_command() -> list[str]:
     uv = shutil.which("uv")
     if uv:
-        return uv
+        return [uv]
+
+    scripts_uv = Path(sys.executable).resolve().parent / "Scripts" / "uv.exe"
+    if scripts_uv.exists():
+        return [str(scripts_uv)]
+
+    try:
+        subprocess.check_call([sys.executable, "-m", "uv", "--version"], stdout=subprocess.DEVNULL)
+        return [sys.executable, "-m", "uv"]
+    except subprocess.CalledProcessError:
+        pass
+
     raise RuntimeError("uv is required. Install from https://docs.astral.sh/uv/ and rerun.")
 
 
 def install_worker(root: Path) -> None:
-    uv = ensure_uv()
+    uv = ensure_uv_command()
     worker_dir = REPO_ROOT / "worker"
-    run([uv, "venv", str(root / ".venv")])
     python = root / ".venv" / ("Scripts/python.exe" if os.name == "nt" else "bin/python")
-    run([str(python), "-m", "pip", "install", "-e", str(worker_dir)])
+    if not python.exists():
+        run([*uv, "venv", str(root / ".venv")])
+    run([*uv, "pip", "install", "--python", str(python), "-e", str(worker_dir)])
 
 
 def install_corridorkey(root: Path, source: Path, extra: str) -> None:
-    uv = ensure_uv()
+    uv = ensure_uv_command()
     python = root / ".venv" / ("Scripts/python.exe" if os.name == "nt" else "bin/python")
     package = f"{source}[{extra}]" if extra != "cpu" else str(source)
-    run([uv, "pip", "install", "--python", str(python), "-e", package])
+    run([*uv, "pip", "install", "--python", str(python), "-e", package])
 
 
 def main() -> int:
@@ -84,4 +96,3 @@ if __name__ == "__main__":
     except Exception as exc:  # noqa: BLE001
         print(f"error: {exc}", file=sys.stderr)
         raise SystemExit(1)
-
