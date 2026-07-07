@@ -67,6 +67,9 @@ def main() -> None:
                 expected = output / f"corridorkey_{name}_0001.exr"
                 if not expected.exists():
                     raise RuntimeError(f"missing output: {expected}")
+
+            if not hasattr(bpy.types, "SEQUENCER_MT_modifier_add"):
+                raise RuntimeError("Blender is missing the VSE modifier add menu")
     finally:
         corridorkey_blender.unregister()
 

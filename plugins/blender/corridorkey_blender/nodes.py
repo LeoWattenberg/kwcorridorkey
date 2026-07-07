@@ -118,14 +118,26 @@ def output_frame_path(output_dir: str, frame: int, stem: str, suffix: str = "exr
     return os.path.join(output_dir, f"corridorkey_{stem}_{frame:04d}.{suffix}")
 
 
+def create_corridorkey_node_group(name: str = "CorridorKey") -> tuple[bpy.types.NodeTree, CORRIDORKEY_ND_compositor_node]:
+    tree = bpy.data.node_groups.new(name, "CompositorNodeTree")
+    node = tree.nodes.new(CORRIDORKEY_ND_compositor_node.bl_idname)
+    node.location = (0, 0)
+    return tree, node
+
+
 def add_menu_entry(self, context):
-    if context.space_data.tree_type == "CompositorNodeTree":
-        self.layout.operator("node.add_node", text="CorridorKey", icon="IMAGE_ALPHA").type = CORRIDORKEY_ND_compositor_node.bl_idname
+    self.layout.operator("node.add_node", text="CorridorKey", icon="IMAGE_ALPHA").type = CORRIDORKEY_ND_compositor_node.bl_idname
+
+
+def add_sequencer_modifier_menu_entry(self, context):
+    self.layout.operator("corridorkey.add_strip_modifier", text="CorridorKey", icon="IMAGE_ALPHA")
 
 
 def register():
-    bpy.types.NODE_MT_add.append(add_menu_entry)
+    bpy.types.NODE_MT_category_compositor_keying.append(add_menu_entry)
+    bpy.types.SEQUENCER_MT_modifier_add.append(add_sequencer_modifier_menu_entry)
 
 
 def unregister():
-    bpy.types.NODE_MT_add.remove(add_menu_entry)
+    bpy.types.SEQUENCER_MT_modifier_add.remove(add_sequencer_modifier_menu_entry)
+    bpy.types.NODE_MT_category_compositor_keying.remove(add_menu_entry)

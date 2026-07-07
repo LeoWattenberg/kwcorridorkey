@@ -8,6 +8,7 @@ import bpy
 from .color_key import write_color_key_hint, write_color_key_preview
 from .image_io import load_image_to_raw, output_frame_path, resolve_frame_path, save_raw_to_image
 from .nodes import (
+    create_corridorkey_node_group,
     get_color_socket_value,
     get_float_socket_value,
     linked_image_path,
@@ -102,6 +103,14 @@ def _strip_path(strip):
     raise ValueError(f"Selected strip '{strip.name}' does not expose a file path")
 
 
+def _active_strip(context):
+    editor = getattr(context.scene, "sequence_editor", None)
+    if editor is not None and getattr(editor, "active_strip", None) is not None:
+        return editor.active_strip
+    strips = _selected_strips(context)
+    return strips[0] if strips else None
+
+
 class CORRIDORKEY_OT_from_selected_strips(bpy.types.Operator):
     bl_idname = "corridorkey.from_selected_strips"
     bl_label = "Use Selected Strips"
@@ -123,6 +132,44 @@ class CORRIDORKEY_OT_from_selected_strips(bpy.types.Operator):
         settings.end_frame = context.scene.frame_end
         if not settings.output_dir:
             settings.output_dir = bpy.path.abspath("//corridorkey_output")
+        return {"FINISHED"}
+
+
+class CORRIDORKEY_OT_add_strip_modifier(bpy.types.Operator):
+    bl_idname = "corridorkey.add_strip_modifier"
+    bl_label = "Add CorridorKey Modifier"
+    bl_options = {"REGISTER", "UNDO"}
+
+    def execute(self, context):
+        strip = _active_strip(context)
+        if strip is None:
+            self.report({"ERROR"}, "Select a video sequence strip")
+            return {"CANCELLED"}
+
+        node_group, node = create_corridorkey_node_group(f"CorridorKey - {strip.name}")
+        node.start_frame = int(getattr(strip, "frame_final_start", context.scene.frame_start))
+        node.end_frame = int(getattr(strip, "frame_final_end", context.scene.frame_end)) - 1
+        node.output_dir = bpy.path.abspath("//corridorkey_output")
+
+        try:
+            bpy.ops.sequencer.strip_modifier_add(type="COMPOSITOR")
+        except Exception as exc:  # noqa: BLE001
+            self.report({"ERROR"}, f"Blender could not add a Compositor strip modifier: {exc}")
+            return {"CANCELLED"}
+
+        modifier = getattr(strip.modifiers, "active", None)
+        if modifier is None:
+            for candidate in reversed(strip.modifiers):
+                if getattr(candidate, "type", "") == "COMPOSITOR":
+                    modifier = candidate
+                    break
+        if modifier is None or not hasattr(modifier, "node_group"):
+            self.report({"ERROR"}, "Blender did not create a Compositor strip modifier")
+            return {"CANCELLED"}
+
+        modifier.name = "CorridorKey"
+        modifier.node_group = node_group
+        self.report({"INFO"}, "CorridorKey compositor modifier added")
         return {"FINISHED"}
 
 

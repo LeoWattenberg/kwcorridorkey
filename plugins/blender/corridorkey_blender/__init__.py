@@ -16,6 +16,7 @@ classes = (
     prefs.CorridorKeyPreferences,
     properties.CorridorKeySceneSettings,
     nodes.CORRIDORKEY_ND_compositor_node,
+    operators.CORRIDORKEY_OT_add_strip_modifier,
     operators.CORRIDORKEY_OT_from_selected_strips,
     operators.CORRIDORKEY_OT_render_sequence,
     operators.CORRIDORKEY_OT_render_selected_node,
