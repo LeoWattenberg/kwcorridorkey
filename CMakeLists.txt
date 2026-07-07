@@ -27,6 +27,9 @@ add_library(corridorkey_client
 )
 target_include_directories(corridorkey_client PUBLIC native/include)
 target_link_libraries(corridorkey_client PUBLIC nlohmann_json::nlohmann_json)
+if(CMAKE_DL_LIBS)
+    target_link_libraries(corridorkey_client PRIVATE ${CMAKE_DL_LIBS})
+endif()
 target_compile_definitions(corridorkey_client PRIVATE
     KWCORRIDORKEY_VERSION="${PROJECT_VERSION}"
 )

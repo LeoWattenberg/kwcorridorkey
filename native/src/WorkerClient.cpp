@@ -3,6 +3,7 @@
 #include <array>
 #include <cstdlib>
 #include <cstring>
+#include <filesystem>
 #include <sstream>
 #include <stdexcept>
 
@@ -15,6 +16,7 @@
 #endif
 #include <windows.h>
 #else
+#include <dlfcn.h>
 #include <sys/types.h>
 #include <sys/wait.h>
 #include <unistd.h>
@@ -56,6 +58,55 @@ nlohmann::json frameSpecToJson(const FrameBufferSpec& spec)
         {"dtype", spec.dtype},
         {"byte_offset", spec.byteOffset},
     };
+}
+
+std::filesystem::path currentModulePath()
+{
+#if defined(_WIN32)
+    HMODULE module = nullptr;
+    if (!GetModuleHandleExA(
+            GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS | GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT,
+            reinterpret_cast<LPCSTR>(&currentModulePath),
+            &module)) {
+        return {};
+    }
+    std::string path(MAX_PATH, '\0');
+    DWORD size = GetModuleFileNameA(module, path.data(), static_cast<DWORD>(path.size()));
+    while (size == path.size()) {
+        path.resize(path.size() * 2);
+        size = GetModuleFileNameA(module, path.data(), static_cast<DWORD>(path.size()));
+    }
+    if (size == 0) {
+        return {};
+    }
+    path.resize(size);
+    return std::filesystem::path(path);
+#else
+    Dl_info info {};
+    if (dladdr(reinterpret_cast<void*>(&currentModulePath), &info) == 0 || !info.dli_fname) {
+        return {};
+    }
+    return std::filesystem::path(info.dli_fname);
+#endif
+}
+
+std::filesystem::path bundleLocalWorkerPython()
+{
+    const auto modulePath = currentModulePath();
+    if (modulePath.empty()) {
+        return {};
+    }
+    const auto platformDir = modulePath.parent_path();
+    const auto contentsDir = platformDir.parent_path();
+#if defined(_WIN32)
+    const auto python = contentsDir / "Resources" / "corridorkey-runtime" / ".venv" / "Scripts" / "python.exe";
+#else
+    const auto python = contentsDir / "Resources" / "corridorkey-runtime" / ".venv" / "bin" / "python";
+#endif
+    if (std::filesystem::exists(python)) {
+        return python;
+    }
+    return {};
 }
 
 } // namespace
@@ -431,7 +482,13 @@ nlohmann::json WorkerClient::request(const std::string& command, const nlohmann:
 std::vector<std::string> defaultWorkerCommand()
 {
     const char* configuredPython = std::getenv("CORRIDORKEY_WORKER_PYTHON");
-    const std::string python = configuredPython && configuredPython[0] ? configuredPython : "python";
+    std::string python;
+    if (configuredPython && configuredPython[0]) {
+        python = configuredPython;
+    } else {
+        const auto bundledPython = bundleLocalWorkerPython();
+        python = bundledPython.empty() ? "python" : bundledPython.string();
+    }
     return {python, "-m", "corridorkey_worker", "--stdio"};
 }
 

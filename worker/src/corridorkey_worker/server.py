@@ -3,6 +3,7 @@ from __future__ import annotations
 import argparse
 import logging
 import os
+from pathlib import Path
 import sys
 import time
 import traceback
@@ -18,8 +19,30 @@ from .settings import WorkerSettings
 logger = logging.getLogger(__name__)
 
 
+def configure_runtime_cache() -> None:
+    if os.environ.get("CORRIDORKEY_CACHE_DIR"):
+        cache_root = Path(os.environ["CORRIDORKEY_CACHE_DIR"]).resolve()
+    else:
+        executable = Path(sys.executable).resolve()
+        runtime_root: Path | None = None
+        for parent in executable.parents:
+            if parent.name == ".venv":
+                runtime_root = parent.parent
+                break
+        if runtime_root is None:
+            return
+        cache_root = runtime_root / "cache"
+
+    os.environ.setdefault("XDG_CACHE_HOME", str(cache_root / "xdg"))
+    os.environ.setdefault("HF_HOME", str(cache_root / "huggingface"))
+    os.environ.setdefault("TORCH_HOME", str(cache_root / "torch"))
+    os.environ.setdefault("NUMBA_CACHE_DIR", str(cache_root / "numba"))
+    cache_root.mkdir(parents=True, exist_ok=True)
+
+
 class WorkerServer:
     def __init__(self, input_stream: BinaryIO, output_stream: BinaryIO) -> None:
+        configure_runtime_cache()
         self._input = input_stream
         self._output = output_stream
         self._settings = WorkerSettings()
@@ -125,4 +148,3 @@ def main(argv: list[str] | None = None) -> int:
 
 if __name__ == "__main__":
     raise SystemExit(main())
-

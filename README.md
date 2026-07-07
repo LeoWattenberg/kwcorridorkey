@@ -47,6 +47,20 @@ cmake --preset blender
 cmake --build --preset blender
 ```
 
+Install the Resolve OFX bundle with a bundle-local CorridorKey runtime:
+
+```powershell
+python scripts/install_resolve_ofx_bundle.py --with cuda --force
+```
+
+By default this installs to the system OFX plugin directory and provisions a uv-managed Python, CorridorKey, the worker package, dependencies, notices, and cache directory under `CorridorKeyResolve.ofx.bundle/Contents/Resources/corridorkey-runtime`. The plugin uses that bundled runtime automatically unless `CORRIDORKEY_WORKER_PYTHON` is set.
+
+To create a self-contained build artifact without copying it to the system plugin directory:
+
+```powershell
+python scripts/install_resolve_ofx_bundle.py --in-place --with cuda --preflight-models
+```
+
 Install the external CorridorKey worker environment:
 
 ```powershell
