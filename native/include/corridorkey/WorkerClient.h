@@ -18,7 +18,7 @@ struct WorkerSettings {
     bool autoDespeckle = true;
     int despeckleSize = 400;
     double refiner = 1.0;
-    int inferenceSize = 2048;
+    int inferenceSize = 512;
     std::string backend = "auto";
     std::string device = "auto";
     std::string outputMode = "processed_rgba";
@@ -72,4 +72,3 @@ private:
 std::vector<std::string> defaultWorkerCommand();
 
 } // namespace corridorkey
-
