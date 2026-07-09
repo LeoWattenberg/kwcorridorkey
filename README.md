@@ -83,4 +83,4 @@ Frame data is exchanged via raw float32 files that the worker memory maps. Input
 
 ## License Notice
 
-CorridorKey has additional non-commercial, no-repackaging, and commercial integration restrictions. See `THIRD_PARTY_NOTICES.md` and the upstream license before distributing these plugins.
+CorridorKey currently has a licensing bug, where both his custom license and CC-by-nc-sa state that the other license isn't valid. As such, the fully compiled project may not be distributed currently. See `THIRD_PARTY_NOTICES.md` and the upstream license before distributing these plugins.
