@@ -9,6 +9,9 @@ option(KWCORRIDORKEY_BUILD_TESTS "Build native tests" ON)
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_CXX_EXTENSIONS OFF)
+if(MSVC)
+    set(CMAKE_MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>")
+endif()
 
 include(FetchContent)
 include(GNUInstallDirs)
@@ -39,6 +42,9 @@ endif()
 
 if(KWCORRIDORKEY_BUILD_OPENFX)
     include(cmake/FetchOpenFX.cmake)
+    add_executable(ofx_load_probe native/tools/OfxLoadProbe.cpp)
+    target_include_directories(ofx_load_probe PRIVATE ${OPENFX_INCLUDE_DIR})
+
     add_library(CorridorKeyResolve MODULE
         plugins/resolve/src/CorridorKeyResolve.cpp
     )
@@ -62,6 +68,12 @@ if(KWCORRIDORKEY_BUILD_OPENFX)
         COMMAND ${CMAKE_COMMAND} -E copy_if_different "$<TARGET_FILE:CorridorKeyResolve>" "${_ofx_bundle_dir}/$<TARGET_FILE_NAME:CorridorKeyResolve>"
         COMMENT "Creating CorridorKeyResolve.ofx.bundle"
     )
+    if(KWCORRIDORKEY_BUILD_TESTS)
+        add_test(
+            NAME ofx_load_probe_resolve
+            COMMAND ofx_load_probe "$<TARGET_FILE:CorridorKeyResolve>"
+        )
+    endif()
 endif()
 
 if(KWCORRIDORKEY_BUILD_PREMIERE)
