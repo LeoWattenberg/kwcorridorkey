@@ -27,6 +27,35 @@ def runtime_python(runtime_root: Path) -> Path:
     return runtime_root / ".venv" / ("Scripts/python.exe" if os.name == "nt" else "bin/python")
 
 
+def runtime_worker_python(runtime_root: Path) -> Path:
+    names = ["python.exe"] if os.name == "nt" else ["python3", "python"]
+    python_root = runtime_root / "python"
+    if python_root.exists():
+        for child in python_root.iterdir():
+            if child.is_dir():
+                candidate = child / ("python.exe" if os.name == "nt" else "bin/python")
+                if candidate.is_file():
+                    return candidate
+        for name in names:
+            for candidate in python_root.rglob(name):
+                parts = {part.lower() for part in candidate.parts}
+                if ".venv" not in parts and "venv" not in parts and candidate.is_file():
+                    return candidate
+    return runtime_python(runtime_root)
+
+
+def runtime_environment(runtime_root: Path) -> dict[str, str]:
+    cache_root = runtime_root / "cache"
+    env = os.environ.copy()
+    env.setdefault("CORRIDORKEY_CACHE_DIR", str(cache_root))
+    env.setdefault("XDG_CACHE_HOME", str(cache_root / "xdg"))
+    env.setdefault("HF_HOME", str(cache_root / "huggingface"))
+    env.setdefault("HF_HUB_DISABLE_SYMLINKS_WARNING", "1")
+    env.setdefault("TORCH_HOME", str(cache_root / "torch"))
+    env.setdefault("NUMBA_CACHE_DIR", str(cache_root / "numba"))
+    return env
+
+
 def copy_bundle(source: Path, target: Path, force: bool) -> None:
     if not source.exists():
         raise FileNotFoundError(f"bundle not found: {source}")
@@ -51,7 +80,8 @@ def copy_metadata(resources_dir: Path, lock: dict[str, str], extra: str) -> None
         "runtime": "corridorkey-runtime",
         "corridorkey": lock,
         "dependency_extra": extra,
-        "worker_python": str(runtime_python(resources_dir / "corridorkey-runtime")),
+        "worker_python": str(runtime_worker_python(resources_dir / "corridorkey-runtime")),
+        "venv_python": str(runtime_python(resources_dir / "corridorkey-runtime")),
     }
     (resources_dir / "corridorkey-runtime-manifest.json").write_text(
         json.dumps(manifest, indent=2) + "\n",
@@ -59,17 +89,19 @@ def copy_metadata(resources_dir: Path, lock: dict[str, str], extra: str) -> None
     )
 
 
-def verify_runtime(python: Path) -> None:
+def verify_runtime(runtime_root: Path) -> None:
+    python = runtime_python(runtime_root)
     code = (
         "import importlib;"
         "import corridorkey_worker;"
         "importlib.import_module('CorridorKeyModule.backend');"
         "print('CorridorKey worker runtime import check passed')"
     )
-    install_corridorkey.run([str(python), "-c", code])
+    install_corridorkey.run([str(python), "-c", code], cwd=runtime_root, env=runtime_environment(runtime_root))
 
 
-def preflight_models(python: Path, backend: str, device: str, inference_size: int) -> None:
+def preflight_models(runtime_root: Path, backend: str, device: str, inference_size: int) -> None:
+    python = runtime_python(runtime_root)
     code = (
         "from corridorkey_worker.server import configure_runtime_cache;"
         "from corridorkey_worker.engine import CorridorKeyAdapter;"
@@ -78,7 +110,7 @@ def preflight_models(python: Path, backend: str, device: str, inference_size: in
         f"settings = WorkerSettings(backend={backend!r}, device={device!r}, inference_size={inference_size!r});"
         "print(CorridorKeyAdapter().preflight(settings))"
     )
-    install_corridorkey.run([str(python), "-c", code])
+    install_corridorkey.run([str(python), "-c", code], cwd=runtime_root, env=runtime_environment(runtime_root))
 
 
 def install_runtime(runtime_root: Path, lock_path: Path, extra: str, python_version: str) -> dict[str, str]:
@@ -110,7 +142,7 @@ def main() -> int:
     parser.add_argument("--preflight-models", action="store_true", help="Load CorridorKey engines once so model files are cached")
     parser.add_argument("--backend", choices=["auto", "torch", "mlx"], default="auto")
     parser.add_argument("--device", choices=["auto", "cuda", "mps", "cpu", "rocm"], default="auto")
-    parser.add_argument("--inference-size", type=int, choices=[512, 1024, 2048], default=2048)
+    parser.add_argument("--inference-size", type=int, choices=[512, 1024, 2048], default=512)
     args = parser.parse_args()
 
     source_bundle = Path(args.bundle).resolve()
@@ -127,11 +159,11 @@ def main() -> int:
     lock = install_runtime(runtime_root, Path(args.lock), args.extra, args.python_version)
     copy_metadata(resources_dir, lock, args.extra)
 
-    python = runtime_python(runtime_root)
+    python = runtime_worker_python(runtime_root)
     if not args.skip_import_check:
-        verify_runtime(python)
+        verify_runtime(runtime_root)
     if args.preflight_models:
-        preflight_models(python, args.backend, args.device, args.inference_size)
+        preflight_models(runtime_root, args.backend, args.device, args.inference_size)
 
     print("\nInstalled CorridorKey Resolve bundle:")
     print(target_bundle)

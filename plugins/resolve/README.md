@@ -17,7 +17,7 @@ Install it with a bundle-local CorridorKey runtime:
 python scripts/install_resolve_ofx_bundle.py --with cuda --force
 ```
 
-The installer copies the bundle to the OFX plugin directory and provisions a uv-managed Python, CorridorKey, the worker package, dependencies, notices, and cache directory under `Contents/Resources/corridorkey-runtime`. The plugin will use that runtime automatically unless `CORRIDORKEY_WORKER_PYTHON` is set.
+The installer copies the bundle to the OFX plugin directory and provisions a uv-managed Python, CorridorKey, the worker package, dependencies, notices, and cache directory under `Contents/Resources/corridorkey-runtime`. The plugin will use that runtime automatically unless `CORRIDORKEY_WORKER_PYTHON` is set. On Windows, the plugin launches the bundle-local uv-managed `python.exe` directly and injects the bundled venv's `site-packages`, so the installed bundle remains relocatable after copying.
 
 The effect defines:
 
