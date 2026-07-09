@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import argparse
+import io
 import logging
 import os
 from pathlib import Path
@@ -35,6 +36,7 @@ def configure_runtime_cache() -> None:
 
     os.environ.setdefault("XDG_CACHE_HOME", str(cache_root / "xdg"))
     os.environ.setdefault("HF_HOME", str(cache_root / "huggingface"))
+    os.environ.setdefault("HF_HUB_DISABLE_SYMLINKS_WARNING", "1")
     os.environ.setdefault("TORCH_HOME", str(cache_root / "torch"))
     os.environ.setdefault("NUMBA_CACHE_DIR", str(cache_root / "numba"))
     cache_root.mkdir(parents=True, exist_ok=True)
@@ -141,7 +143,10 @@ def main(argv: list[str] | None = None) -> int:
         parser.error("only --stdio transport is currently supported")
 
     input_stream = sys.stdin.buffer
-    output_stream = sys.stdout.buffer
+    protocol_stdout_fd = os.dup(sys.stdout.fileno())
+    output_stream = io.open(protocol_stdout_fd, "wb", closefd=True)
+    os.dup2(sys.stderr.fileno(), sys.stdout.fileno())
+    sys.stdout = sys.stderr
     WorkerServer(input_stream, output_stream).serve_forever()
     return 0
 

@@ -4,7 +4,8 @@ import importlib
 import logging
 import os
 import time
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
+from pathlib import Path
 from typing import Any, Protocol
 
 import numpy as np
@@ -12,6 +13,15 @@ import numpy as np
 from .settings import WorkerSettings
 
 logger = logging.getLogger(__name__)
+
+
+def prepare_corridorkey_backend(backend_module: Any) -> None:
+    module_file = getattr(backend_module, "__file__", None)
+    if not module_file:
+        return
+    checkpoint_dir = Path(module_file).resolve().parent / "checkpoints"
+    checkpoint_dir.mkdir(parents=True, exist_ok=True)
+    backend_module.CHECKPOINT_DIR = str(checkpoint_dir)
 
 
 class Engine(Protocol):
@@ -95,14 +105,16 @@ class CorridorKeyAdapter:
         self._engines: dict[_EngineKey, Any] = {}
 
     def preflight(self, settings: WorkerSettings) -> dict[str, Any]:
+        settings = self._effective_settings(settings)
         colors = ["green", "blue"] if settings.screen_color == "auto" else [settings.screen_color]
         loaded: list[str] = []
         for color in colors:
             self._get_engine(settings, color)
             loaded.append(color)
-        return {"engine": "corridorkey", "loaded_screen_colors": loaded}
+        return {"engine": "corridorkey", "loaded_screen_colors": loaded, "settings": settings.asdict()}
 
     def process(self, source: np.ndarray, alpha_hint: np.ndarray, settings: WorkerSettings) -> dict[str, Any]:
+        settings = self._effective_settings(settings)
         source_rgb = np.clip(source[:, :, :3].astype(np.float32), 0.0, 1.0)
         mask = alpha_hint[:, :, :1] if alpha_hint.ndim == 3 else alpha_hint[:, :, np.newaxis]
         mask = np.clip(mask.astype(np.float32), 0.0, 1.0)
@@ -122,6 +134,27 @@ class CorridorKeyAdapter:
         )
         result["screen_color"] = screen_color
         return result
+
+    def _effective_settings(self, settings: WorkerSettings) -> WorkerSettings:
+        device = settings.device
+        cuda_available = self._cuda_available()
+        if device == "auto" and cuda_available:
+            logger.info("CUDA is available; resolving auto device to cuda")
+            device = "cuda"
+        if device == "cuda" and not cuda_available:
+            logger.warning("CUDA was requested but is not available; falling back to CPU")
+            device = "cpu"
+        if device != settings.device:
+            return replace(settings, device=device)
+        return settings
+
+    def _cuda_available(self) -> bool:
+        try:
+            import torch
+
+            return bool(torch.cuda.is_available())
+        except Exception:
+            return False
 
     def _get_engine(self, settings: WorkerSettings, screen_color: str) -> Any:
         key = _EngineKey(
@@ -143,6 +176,7 @@ class CorridorKeyAdapter:
                 "CorridorKey is not importable. Run scripts/install_corridorkey.py and launch the worker "
                 "from that environment, or set PYTHONPATH to a pinned CorridorKey checkout."
             ) from exc
+        prepare_corridorkey_backend(backend_module)
 
         backend = None if settings.backend == "auto" else settings.backend
         device = None if settings.device == "auto" else settings.device
@@ -157,4 +191,3 @@ class CorridorKeyAdapter:
         self._engines[key] = engine
         logger.info("Loaded CorridorKey engine %s in %.2fs", key, time.monotonic() - started)
         return engine
-

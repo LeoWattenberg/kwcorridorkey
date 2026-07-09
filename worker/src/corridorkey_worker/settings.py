@@ -20,7 +20,7 @@ class WorkerSettings:
     auto_despeckle: bool = True
     despeckle_size: int = 400
     refiner: float = 1.0
-    inference_size: int = 2048
+    inference_size: int = 512
     backend: str = "auto"
     device: str = "auto"
     output_mode: str = "processed_rgba"
@@ -68,4 +68,3 @@ class WorkerSettings:
     @property
     def despill_strength(self) -> float:
         return max(0.0, min(1.0, int(self.despill) / 10.0))
-
