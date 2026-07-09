@@ -40,6 +40,7 @@ OfxParameterSuiteV1* gParams = nullptr;
 OfxMessageSuiteV2* gMessagesV2 = nullptr;
 OfxMessageSuiteV1* gMessages = nullptr;
 std::mutex gWorkerMutex;
+std::once_flag gLogRotationOnce;
 std::unique_ptr<corridorkey::WorkerClient> gWorker;
 
 struct OfxImage {
@@ -197,6 +198,55 @@ bool getBool(OfxParamSetHandle paramSet, const char* name, OfxTime time, bool fa
     return getInt(paramSet, name, time, fallback ? 1 : 0) != 0;
 }
 
+std::vector<std::filesystem::path> diagnosticLogPaths()
+{
+    std::error_code ec;
+    std::vector<std::filesystem::path> paths;
+    const auto temp = std::filesystem::temp_directory_path(ec);
+    if (!ec) {
+        paths.push_back(temp / "CorridorKeyResolve.log");
+    }
+    paths.emplace_back("C:\\tmp\\CorridorKeyResolve.log");
+    return paths;
+}
+
+void appendToDiagnosticLogs(const std::string& message)
+{
+    for (const auto& path : diagnosticLogPaths()) {
+        std::error_code mkdirError;
+        std::filesystem::create_directories(path.parent_path(), mkdirError);
+        std::ofstream out(path, std::ios::app);
+        if (out) {
+            out << message << '\n';
+        }
+    }
+}
+
+void rotateDiagnosticLogsOnce()
+{
+    std::call_once(gLogRotationOnce, [] {
+        for (const auto& path : diagnosticLogPaths()) {
+            std::error_code mkdirError;
+            std::filesystem::create_directories(path.parent_path(), mkdirError);
+
+            std::error_code existsError;
+            if (!std::filesystem::exists(path, existsError) || existsError) {
+                continue;
+            }
+
+            const auto previous = path.parent_path() / (path.stem().string() + ".previous" + path.extension().string());
+            std::error_code removeError;
+            std::filesystem::remove(previous, removeError);
+            std::error_code renameError;
+            std::filesystem::rename(path, previous, renameError);
+            if (renameError) {
+                std::ofstream truncate(path, std::ios::trunc);
+            }
+        }
+        appendToDiagnosticLogs("CorridorKeyResolve log started");
+    });
+}
+
 void logDiagnostic(OfxImageEffectHandle effect, const std::string& message)
 {
 #if defined(_WIN32)
@@ -209,21 +259,7 @@ void logDiagnostic(OfxImageEffectHandle effect, const std::string& message)
         gMessages->message(effect, kOfxMessageError, "CorridorKeyResolveRenderError", "%s", message.c_str());
     }
 
-    std::error_code ec;
-    std::vector<std::filesystem::path> paths;
-    const auto temp = std::filesystem::temp_directory_path(ec);
-    if (!ec) {
-        paths.push_back(temp / "CorridorKeyResolve.log");
-    }
-    paths.emplace_back("C:\\tmp\\CorridorKeyResolve.log");
-    for (const auto& path : paths) {
-        std::error_code mkdirError;
-        std::filesystem::create_directories(path.parent_path(), mkdirError);
-        std::ofstream out(path, std::ios::app);
-        if (out) {
-            out << message << '\n';
-        }
-    }
+    appendToDiagnosticLogs(message);
 }
 
 void appendDiagnostic(const std::string& message)
@@ -231,21 +267,7 @@ void appendDiagnostic(const std::string& message)
 #if defined(_WIN32)
     OutputDebugStringA(("CorridorKeyResolve: " + message + "\n").c_str());
 #endif
-    std::error_code ec;
-    std::vector<std::filesystem::path> paths;
-    const auto temp = std::filesystem::temp_directory_path(ec);
-    if (!ec) {
-        paths.push_back(temp / "CorridorKeyResolve.log");
-    }
-    paths.emplace_back("C:\\tmp\\CorridorKeyResolve.log");
-    for (const auto& path : paths) {
-        std::error_code mkdirError;
-        std::filesystem::create_directories(path.parent_path(), mkdirError);
-        std::ofstream out(path, std::ios::app);
-        if (out) {
-            out << message << '\n';
-        }
-    }
+    appendToDiagnosticLogs(message);
 }
 
 void requireStatus(OfxStatus status, const char* operation)
@@ -508,6 +530,7 @@ OfxStatus pluginMain(const char* action, const void* handle, OfxPropertySetHandl
     }
     try {
         if (std::strcmp(action, kOfxActionLoad) == 0) {
+            rotateDiagnosticLogsOnce();
             return kOfxStatOK;
         }
         if (std::strcmp(action, kOfxActionUnload) == 0) {
