@@ -8,9 +8,9 @@ This repository does not vendor CorridorKey. Build and install tooling resolves 
 
 - `worker/`: Python worker package exposing the length-prefixed JSON protocol and CorridorKey engine adapter.
 - `native/`: C++ client library used by host plugins.
-- `plugins/resolve/`: OpenFX effect for DaVinci Resolve.
-- `plugins/premiere/`: Adobe Premiere/After Effects-compatible C++ effect.
-- `plugins/blender/`: Blender add-on with VSE/compositor workflow operators.
+- WORKING `plugins/resolve/`: OpenFX effect for DaVinci Resolve.
+- NOT IMPLEMENTED `plugins/premiere/`: Adobe Premiere/After Effects-compatible C++ effect.  
+- PARTIALLY WORKING `plugins/blender/`: Blender add-on with VSE/compositor workflow operators.
 - `scripts/`: dependency resolution, worker installation, and packaging helpers.
 
 ## Build
