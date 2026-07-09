@@ -3,15 +3,29 @@
 
 #include <ofxCore.h>
 #include <ofxImageEffect.h>
+#include <ofxMessage.h>
 #include <ofxParam.h>
 #include <ofxProperty.h>
 
 #include <algorithm>
 #include <cstring>
+#include <filesystem>
+#include <fstream>
 #include <memory>
+#include <mutex>
 #include <stdexcept>
 #include <string>
 #include <vector>
+
+#if defined(_WIN32)
+#ifndef NOMINMAX
+#define NOMINMAX
+#endif
+#ifndef WIN32_LEAN_AND_MEAN
+#define WIN32_LEAN_AND_MEAN
+#endif
+#include <windows.h>
+#endif
 
 namespace {
 
@@ -23,6 +37,10 @@ const OfxHost* gHost = nullptr;
 OfxPropertySuiteV1* gProperties = nullptr;
 OfxImageEffectSuiteV1* gEffects = nullptr;
 OfxParameterSuiteV1* gParams = nullptr;
+OfxMessageSuiteV2* gMessagesV2 = nullptr;
+OfxMessageSuiteV1* gMessages = nullptr;
+std::mutex gWorkerMutex;
+std::unique_ptr<corridorkey::WorkerClient> gWorker;
 
 struct OfxImage {
     OfxPropertySetHandle handle = nullptr;
@@ -57,6 +75,14 @@ void requireSuites()
     if (!gParams) {
         gParams = const_cast<OfxParameterSuiteV1*>(
             reinterpret_cast<const OfxParameterSuiteV1*>(gHost->fetchSuite(gHost->host, kOfxParameterSuite, 1)));
+    }
+    if (!gMessagesV2) {
+        gMessagesV2 = const_cast<OfxMessageSuiteV2*>(
+            reinterpret_cast<const OfxMessageSuiteV2*>(gHost->fetchSuite(gHost->host, kOfxMessageSuite, 2)));
+    }
+    if (!gMessages) {
+        gMessages = const_cast<OfxMessageSuiteV1*>(
+            reinterpret_cast<const OfxMessageSuiteV1*>(gHost->fetchSuite(gHost->host, kOfxMessageSuite, 1)));
     }
     if (!gProperties || !gEffects || !gParams) {
         throw std::runtime_error("required OFX suites are unavailable");
@@ -104,6 +130,19 @@ std::vector<float> copyImageToRgba(const OfxImage& image)
         std::copy(src, src + static_cast<std::size_t>(width) * 4, pixels.begin() + static_cast<std::size_t>(y) * width * 4);
     }
     return pixels;
+}
+
+std::vector<float> alphaHintFromSourceAlpha(const std::vector<float>& sourcePixels)
+{
+    std::vector<float> alpha(sourcePixels.size(), 0.0f);
+    for (std::size_t i = 0; i + 3 < sourcePixels.size(); i += 4) {
+        const float a = sourcePixels[i + 3];
+        alpha[i] = a;
+        alpha[i + 1] = a;
+        alpha[i + 2] = a;
+        alpha[i + 3] = 1.0f;
+    }
+    return alpha;
 }
 
 void copyRgbaToImage(const std::vector<float>& pixels, const OfxImage& image)
@@ -158,10 +197,76 @@ bool getBool(OfxParamSetHandle paramSet, const char* name, OfxTime time, bool fa
     return getInt(paramSet, name, time, fallback ? 1 : 0) != 0;
 }
 
+void logDiagnostic(OfxImageEffectHandle effect, const std::string& message)
+{
+#if defined(_WIN32)
+    OutputDebugStringA(("CorridorKeyResolve: " + message + "\n").c_str());
+#endif
+    if (gMessagesV2 && gMessagesV2->setPersistentMessage && effect) {
+        gMessagesV2->setPersistentMessage(effect, kOfxMessageError, "CorridorKeyResolveRenderError", "%s", message.c_str());
+    }
+    if (gMessages && gMessages->message) {
+        gMessages->message(effect, kOfxMessageError, "CorridorKeyResolveRenderError", "%s", message.c_str());
+    }
+
+    std::error_code ec;
+    std::vector<std::filesystem::path> paths;
+    const auto temp = std::filesystem::temp_directory_path(ec);
+    if (!ec) {
+        paths.push_back(temp / "CorridorKeyResolve.log");
+    }
+    paths.emplace_back("C:\\tmp\\CorridorKeyResolve.log");
+    for (const auto& path : paths) {
+        std::error_code mkdirError;
+        std::filesystem::create_directories(path.parent_path(), mkdirError);
+        std::ofstream out(path, std::ios::app);
+        if (out) {
+            out << message << '\n';
+        }
+    }
+}
+
+void appendDiagnostic(const std::string& message)
+{
+#if defined(_WIN32)
+    OutputDebugStringA(("CorridorKeyResolve: " + message + "\n").c_str());
+#endif
+    std::error_code ec;
+    std::vector<std::filesystem::path> paths;
+    const auto temp = std::filesystem::temp_directory_path(ec);
+    if (!ec) {
+        paths.push_back(temp / "CorridorKeyResolve.log");
+    }
+    paths.emplace_back("C:\\tmp\\CorridorKeyResolve.log");
+    for (const auto& path : paths) {
+        std::error_code mkdirError;
+        std::filesystem::create_directories(path.parent_path(), mkdirError);
+        std::ofstream out(path, std::ios::app);
+        if (out) {
+            out << message << '\n';
+        }
+    }
+}
+
+void requireStatus(OfxStatus status, const char* operation)
+{
+    if (status != kOfxStatOK) {
+        throw std::runtime_error(operation);
+    }
+}
+
+void requireHandle(const void* handle, const char* operation)
+{
+    if (!handle) {
+        throw std::runtime_error(operation);
+    }
+}
+
 corridorkey::WorkerSettings readSettings(OfxImageEffectHandle effect, OfxTime time)
 {
     OfxParamSetHandle paramSet = nullptr;
-    gEffects->getParamSet(effect, &paramSet);
+    requireStatus(gEffects->getParamSet(effect, &paramSet), "failed to get parameter set");
+    requireHandle(paramSet, "parameter set is null");
 
     corridorkey::WorkerSettings settings;
     settings.screenColor = choiceValue(getChoice(paramSet, "screenColor", time, 0), {"auto", "green", "blue"});
@@ -173,7 +278,7 @@ corridorkey::WorkerSettings readSettings(OfxImageEffectHandle effect, OfxTime ti
     settings.autoDespeckle = getBool(paramSet, "autoDespeckle", time, true);
     settings.despeckleSize = getInt(paramSet, "despeckleSize", time, 400);
     settings.refiner = getDouble(paramSet, "refiner", time, 1.0);
-    settings.inferenceSize = std::stoi(choiceValue(getChoice(paramSet, "inferenceSize", time, 2), {"512", "1024", "2048"}));
+    settings.inferenceSize = std::stoi(choiceValue(getChoice(paramSet, "inferenceSize", time, 0), {"512", "1024", "2048"}));
     settings.backend = choiceValue(getChoice(paramSet, "backend", time, 0), {"auto", "torch", "mlx"});
     settings.device = choiceValue(getChoice(paramSet, "device", time, 0), {"auto", "cuda", "mps", "cpu", "rocm"});
     return settings;
@@ -181,62 +286,76 @@ corridorkey::WorkerSettings readSettings(OfxImageEffectHandle effect, OfxTime ti
 
 void setClipFormat(OfxPropertySetHandle props)
 {
-    gProperties->propSetString(props, kOfxImageEffectPropSupportedComponents, 0, kOfxImageComponentRGBA);
-    gProperties->propSetString(props, kOfxImageEffectPropSupportedPixelDepths, 0, kOfxBitDepthFloat);
+    requireHandle(props, "clip properties are null");
+    requireStatus(
+        gProperties->propSetString(props, kOfxImageEffectPropSupportedComponents, 0, kOfxImageComponentRGBA),
+        "failed to set clip components");
 }
 
 void addChoice(OfxParamSetHandle paramSet, const char* name, const char* label, std::initializer_list<const char*> choices, int defaultValue)
 {
     OfxPropertySetHandle props = nullptr;
-    gParams->paramDefine(paramSet, kOfxParamTypeChoice, name, &props);
-    gProperties->propSetString(props, kOfxPropLabel, 0, label);
+    requireStatus(gParams->paramDefine(paramSet, kOfxParamTypeChoice, name, &props), "failed to define choice parameter");
+    requireHandle(props, "choice parameter properties are null");
+    requireStatus(gProperties->propSetString(props, kOfxPropLabel, 0, label), "failed to set choice label");
     int index = 0;
     for (const char* choice : choices) {
-        gProperties->propSetString(props, kOfxParamPropChoiceOption, index++, choice);
+        requireStatus(
+            gProperties->propSetString(props, kOfxParamPropChoiceOption, index++, choice),
+            "failed to set choice option");
     }
-    gProperties->propSetInt(props, kOfxParamPropDefault, 0, defaultValue);
+    requireStatus(gProperties->propSetInt(props, kOfxParamPropDefault, 0, defaultValue), "failed to set choice default");
 }
 
 void addInt(OfxParamSetHandle paramSet, const char* name, const char* label, int defaultValue, int minValue, int maxValue)
 {
     OfxPropertySetHandle props = nullptr;
-    gParams->paramDefine(paramSet, kOfxParamTypeInteger, name, &props);
-    gProperties->propSetString(props, kOfxPropLabel, 0, label);
-    gProperties->propSetInt(props, kOfxParamPropDefault, 0, defaultValue);
-    gProperties->propSetInt(props, kOfxParamPropMin, 0, minValue);
-    gProperties->propSetInt(props, kOfxParamPropMax, 0, maxValue);
+    requireStatus(gParams->paramDefine(paramSet, kOfxParamTypeInteger, name, &props), "failed to define integer parameter");
+    requireHandle(props, "integer parameter properties are null");
+    requireStatus(gProperties->propSetString(props, kOfxPropLabel, 0, label), "failed to set integer label");
+    requireStatus(gProperties->propSetInt(props, kOfxParamPropDefault, 0, defaultValue), "failed to set integer default");
+    requireStatus(gProperties->propSetInt(props, kOfxParamPropMin, 0, minValue), "failed to set integer minimum");
+    requireStatus(gProperties->propSetInt(props, kOfxParamPropMax, 0, maxValue), "failed to set integer maximum");
 }
 
 void addBool(OfxParamSetHandle paramSet, const char* name, const char* label, bool defaultValue)
 {
     OfxPropertySetHandle props = nullptr;
-    gParams->paramDefine(paramSet, kOfxParamTypeBoolean, name, &props);
-    gProperties->propSetString(props, kOfxPropLabel, 0, label);
-    gProperties->propSetInt(props, kOfxParamPropDefault, 0, defaultValue ? 1 : 0);
+    requireStatus(gParams->paramDefine(paramSet, kOfxParamTypeBoolean, name, &props), "failed to define boolean parameter");
+    requireHandle(props, "boolean parameter properties are null");
+    requireStatus(gProperties->propSetString(props, kOfxPropLabel, 0, label), "failed to set boolean label");
+    requireStatus(gProperties->propSetInt(props, kOfxParamPropDefault, 0, defaultValue ? 1 : 0), "failed to set boolean default");
 }
 
 void addDouble(OfxParamSetHandle paramSet, const char* name, const char* label, double defaultValue, double minValue, double maxValue)
 {
     OfxPropertySetHandle props = nullptr;
-    gParams->paramDefine(paramSet, kOfxParamTypeDouble, name, &props);
-    gProperties->propSetString(props, kOfxPropLabel, 0, label);
-    gProperties->propSetDouble(props, kOfxParamPropDefault, 0, defaultValue);
-    gProperties->propSetDouble(props, kOfxParamPropMin, 0, minValue);
-    gProperties->propSetDouble(props, kOfxParamPropMax, 0, maxValue);
+    requireStatus(gParams->paramDefine(paramSet, kOfxParamTypeDouble, name, &props), "failed to define double parameter");
+    requireHandle(props, "double parameter properties are null");
+    requireStatus(gProperties->propSetString(props, kOfxPropLabel, 0, label), "failed to set double label");
+    requireStatus(gProperties->propSetDouble(props, kOfxParamPropDefault, 0, defaultValue), "failed to set double default");
+    requireStatus(gProperties->propSetDouble(props, kOfxParamPropMin, 0, minValue), "failed to set double minimum");
+    requireStatus(gProperties->propSetDouble(props, kOfxParamPropMax, 0, maxValue), "failed to set double maximum");
 }
 
 OfxStatus describe(OfxImageEffectHandle effect)
 {
     requireSuites();
     OfxPropertySetHandle props = nullptr;
-    gEffects->getPropertySet(effect, &props);
-    gProperties->propSetString(props, kOfxPropLabel, 0, "CorridorKey");
-    gProperties->propSetString(props, kOfxImageEffectPluginPropGrouping, 0, "Keying");
-    gProperties->propSetString(props, kOfxImageEffectPropSupportedContexts, 0, kOfxImageEffectContextGeneral);
-    gProperties->propSetString(props, kOfxImageEffectPropSupportedContexts, 1, kOfxImageEffectContextFilter);
-    gProperties->propSetString(props, kOfxImageEffectPropSupportedPixelDepths, 0, kOfxBitDepthFloat);
-    gProperties->propSetInt(props, kOfxImageEffectPluginPropSingleInstance, 0, 0);
-    gProperties->propSetString(props, kOfxImageEffectPluginRenderThreadSafety, 0, kOfxImageEffectRenderInstanceSafe);
+    requireStatus(gEffects->getPropertySet(effect, &props), "failed to get effect properties");
+    requireHandle(props, "effect properties are null");
+    requireStatus(gProperties->propSetString(props, kOfxPropLabel, 0, "CorridorKey"), "failed to set label");
+    requireStatus(gProperties->propSetString(props, kOfxImageEffectPluginPropGrouping, 0, "Keying"), "failed to set grouping");
+    requireStatus(
+        gProperties->propSetString(props, kOfxImageEffectPropSupportedContexts, 0, kOfxImageEffectContextGeneral),
+        "failed to set supported context");
+    requireStatus(
+        gProperties->propSetString(props, kOfxImageEffectPropSupportedPixelDepths, 0, kOfxBitDepthFloat),
+        "failed to set supported pixel depth");
+    requireStatus(gProperties->propSetInt(props, kOfxImageEffectPluginPropSingleInstance, 0, 0), "failed to set single instance");
+    requireStatus(
+        gProperties->propSetString(props, kOfxImageEffectPluginRenderThreadSafety, 0, kOfxImageEffectRenderInstanceSafe),
+        "failed to set render thread safety");
     return kOfxStatOK;
 }
 
@@ -244,15 +363,17 @@ OfxStatus describeInContext(OfxImageEffectHandle effect)
 {
     requireSuites();
     OfxPropertySetHandle clipProps = nullptr;
-    gEffects->clipDefine(effect, kOfxImageEffectSimpleSourceClipName, &clipProps);
+    requireStatus(gEffects->clipDefine(effect, kOfxImageEffectOutputClipName, &clipProps), "failed to define output clip");
     setClipFormat(clipProps);
-    gEffects->clipDefine(effect, "AlphaHint", &clipProps);
+    requireStatus(gEffects->clipDefine(effect, kOfxImageEffectSimpleSourceClipName, &clipProps), "failed to define source clip");
     setClipFormat(clipProps);
-    gEffects->clipDefine(effect, kOfxImageEffectOutputClipName, &clipProps);
+    requireStatus(gEffects->clipDefine(effect, "AlphaHint", &clipProps), "failed to define alpha hint clip");
     setClipFormat(clipProps);
+    requireStatus(gProperties->propSetInt(clipProps, kOfxImageClipPropOptional, 0, 1), "failed to set alpha hint optional");
 
     OfxParamSetHandle paramSet = nullptr;
-    gEffects->getParamSet(effect, &paramSet);
+    requireStatus(gEffects->getParamSet(effect, &paramSet), "failed to get parameter set");
+    requireHandle(paramSet, "parameter set is null");
     addChoice(paramSet, "screenColor", "Screen Color", {"Auto", "Green", "Blue"}, 0);
     addChoice(paramSet, "inputColorspace", "Input Colorspace", {"sRGB", "Linear"}, 0);
     addChoice(paramSet, "outputMode", "Output Mode", {"Processed RGBA", "Matte", "Straight FG", "Checker Comp"}, 0);
@@ -260,10 +381,42 @@ OfxStatus describeInContext(OfxImageEffectHandle effect)
     addBool(paramSet, "autoDespeckle", "Auto Despeckle", true);
     addInt(paramSet, "despeckleSize", "Despeckle Size", 400, 0, 100000);
     addDouble(paramSet, "refiner", "Refiner", 1.0, 0.01, 10.0);
-    addChoice(paramSet, "inferenceSize", "Inference Size", {"512", "1024", "2048"}, 2);
+    addChoice(paramSet, "inferenceSize", "Inference Size", {"512", "1024", "2048"}, 0);
     addChoice(paramSet, "backend", "Backend", {"Auto", "Torch", "MLX"}, 0);
     addChoice(paramSet, "device", "Device", {"Auto", "CUDA", "MPS", "CPU", "ROCm"}, 0);
     return kOfxStatOK;
+}
+
+void resetWorker()
+{
+    std::lock_guard<std::mutex> lock(gWorkerMutex);
+    gWorker.reset();
+}
+
+corridorkey::ProcessResult processWithSharedWorker(const corridorkey::ProcessRequest& request, OfxTime time)
+{
+    std::lock_guard<std::mutex> lock(gWorkerMutex);
+    if (!gWorker) {
+        appendDiagnostic("starting CorridorKey worker at time " + std::to_string(time));
+        gWorker = std::make_unique<corridorkey::WorkerClient>();
+        gWorker->start();
+        appendDiagnostic("CorridorKey worker started at time " + std::to_string(time));
+    }
+    try {
+        appendDiagnostic(
+            "sending CorridorKey process request at time " + std::to_string(time)
+            + " size=" + std::to_string(request.source.width) + "x" + std::to_string(request.source.height)
+            + " inference=" + std::to_string(request.settings.inferenceSize)
+            + " device=" + request.settings.device);
+        auto result = gWorker->process(request);
+        appendDiagnostic(
+            "CorridorKey process completed at time " + std::to_string(time)
+            + " elapsed_ms=" + std::to_string(result.elapsedMs));
+        return result;
+    } catch (...) {
+        gWorker.reset();
+        throw;
+    }
 }
 
 OfxStatus render(OfxImageEffectHandle effect, OfxPropertySetHandle inArgs)
@@ -283,8 +436,7 @@ OfxStatus render(OfxImageEffectHandle effect, OfxPropertySetHandle inArgs)
     OfxImage alpha;
     OfxImage output;
     try {
-        if (getImage(sourceClip, time, source) != kOfxStatOK || getImage(alphaClip, time, alpha) != kOfxStatOK
-            || getImage(outputClip, time, output) != kOfxStatOK) {
+        if (getImage(sourceClip, time, source) != kOfxStatOK || getImage(outputClip, time, output) != kOfxStatOK) {
             throw std::runtime_error("failed to fetch one or more OFX images");
         }
         if (widthOf(source) != widthOf(output) || heightOf(source) != heightOf(output)) {
@@ -299,33 +451,39 @@ OfxStatus render(OfxImageEffectHandle effect, OfxPropertySetHandle inArgs)
 
         corridorkey::FrameBufferSpec alphaSpec = sourceSpec;
         alphaSpec.path = corridorkey::makeTempFramePath("resolve_alpha");
-        alphaSpec.width = widthOf(alpha);
-        alphaSpec.height = heightOf(alpha);
 
         corridorkey::FrameBufferSpec outputSpec = sourceSpec;
         outputSpec.path = corridorkey::makeTempFramePath("resolve_output");
 
         const auto sourcePixels = copyImageToRgba(source);
-        const auto alphaPixels = copyImageToRgba(alpha);
+        const bool hasAlphaHint = getImage(alphaClip, time, alpha) == kOfxStatOK;
+        if (hasAlphaHint && (widthOf(alpha) != widthOf(source) || heightOf(alpha) != heightOf(source))) {
+            throw std::runtime_error("alpha hint dimensions differ from source dimensions");
+        }
+        const auto alphaPixels = hasAlphaHint ? copyImageToRgba(alpha) : alphaHintFromSourceAlpha(sourcePixels);
         corridorkey::writeFloatFrame(sourceSpec, sourcePixels.data(), sourcePixels.size());
         corridorkey::writeFloatFrame(alphaSpec, alphaPixels.data(), alphaPixels.size());
 
-        corridorkey::WorkerClient worker;
-        worker.start();
         corridorkey::ProcessRequest request;
         request.source = sourceSpec;
         request.alphaHint = alphaSpec;
         request.output = outputSpec;
         request.settings = readSettings(effect, time);
-        worker.process(request);
-        worker.stop();
+        processWithSharedWorker(request, time);
 
         const auto outputPixels = corridorkey::readFloatFrame(outputSpec);
         copyRgbaToImage(outputPixels, output);
         corridorkey::removeFileIfExists(sourceSpec.path);
         corridorkey::removeFileIfExists(alphaSpec.path);
         corridorkey::removeFileIfExists(outputSpec.path);
+    } catch (const std::exception& exc) {
+        logDiagnostic(effect, std::string("render failed at time ") + std::to_string(time) + ": " + exc.what());
+        releaseImage(source);
+        releaseImage(alpha);
+        releaseImage(output);
+        return kOfxStatFailed;
     } catch (...) {
+        logDiagnostic(effect, std::string("render failed at time ") + std::to_string(time) + ": unknown exception");
         releaseImage(source);
         releaseImage(alpha);
         releaseImage(output);
@@ -338,22 +496,37 @@ OfxStatus render(OfxImageEffectHandle effect, OfxPropertySetHandle inArgs)
     return kOfxStatOK;
 }
 
+void pluginSetHost(OfxHost* host)
+{
+    gHost = host;
+}
+
 OfxStatus pluginMain(const char* action, const void* handle, OfxPropertySetHandle inArgs, OfxPropertySetHandle)
 {
-    if (std::strcmp(action, kOfxActionLoad) == 0) {
-        requireSuites();
-        return kOfxStatOK;
+    if (!action) {
+        return kOfxStatFailed;
     }
-    if (std::strcmp(action, kOfxActionDescribe) == 0) {
-        return describe(reinterpret_cast<OfxImageEffectHandle>(const_cast<void*>(handle)));
+    try {
+        if (std::strcmp(action, kOfxActionLoad) == 0) {
+            return kOfxStatOK;
+        }
+        if (std::strcmp(action, kOfxActionUnload) == 0) {
+            resetWorker();
+            return kOfxStatOK;
+        }
+        if (std::strcmp(action, kOfxActionDescribe) == 0) {
+            return describe(reinterpret_cast<OfxImageEffectHandle>(const_cast<void*>(handle)));
+        }
+        if (std::strcmp(action, kOfxImageEffectActionDescribeInContext) == 0) {
+            return describeInContext(reinterpret_cast<OfxImageEffectHandle>(const_cast<void*>(handle)));
+        }
+        if (std::strcmp(action, kOfxImageEffectActionRender) == 0) {
+            return render(reinterpret_cast<OfxImageEffectHandle>(const_cast<void*>(handle)), inArgs);
+        }
+        return kOfxStatReplyDefault;
+    } catch (...) {
+        return kOfxStatFailed;
     }
-    if (std::strcmp(action, kOfxImageEffectActionDescribeInContext) == 0) {
-        return describeInContext(reinterpret_cast<OfxImageEffectHandle>(const_cast<void*>(handle)));
-    }
-    if (std::strcmp(action, kOfxImageEffectActionRender) == 0) {
-        return render(reinterpret_cast<OfxImageEffectHandle>(const_cast<void*>(handle)), inArgs);
-    }
-    return kOfxStatReplyDefault;
 }
 
 OfxPlugin gPlugin = {
@@ -362,7 +535,7 @@ OfxPlugin gPlugin = {
     kPluginIdentifier,
     kPluginVersionMajor,
     kPluginVersionMinor,
-    nullptr,
+    pluginSetHost,
     pluginMain,
 };
 
@@ -382,7 +555,7 @@ OfxExport OfxPlugin* OfxGetPlugin(int nth)
 
 OfxExport OfxStatus OfxSetHost(const OfxHost* host)
 {
-    gHost = host;
+    gHost = const_cast<OfxHost*>(host);
     return kOfxStatOK;
 }
 
